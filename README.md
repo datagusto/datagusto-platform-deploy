@@ -6,8 +6,10 @@ repository when you have been given pull access; nothing here needs the
 source code. The registry host, the access role and the image versions are
 sent to you separately.
 
-The tags of this repository match the image versions: check out `v0.1.0`
-to deploy images tagged `0.1.0`.
+By default the deployment runs the `latest` image tag, which datagusto moves
+to each stable release, and `main` of this repository always matches it.
+The tags of this repository match the image versions (`v0.1.0` ↔ image
+`0.1.0`) for deployments that pin a version.
 
 | File | Purpose |
 |---|---|
@@ -57,17 +59,23 @@ scripts/ecr-login.sh datagusto
 ```bash
 git clone https://github.com/datagusto/datagusto-platform-deploy.git
 cd datagusto-platform-deploy
-git checkout v0.1.0            # the image version you were told to run
 
 cp .env.example .env
 # Fill in: PUBLIC_BASE_URL, POSTGRES_PASSWORD, JWT_SECRET_KEY, JWT_REFRESH_SECRET_KEY
 # Generate keys with: openssl rand -hex 32
 # Set IMAGE_REGISTRY to the registry host you were given, with a trailing slash.
+# DATAGUSTO_VERSION is "latest" by default.
 
 docker compose pull
 docker compose up -d
 docker compose ps              # all services "running" / "healthy"
 curl -fsS http://<host>/health
+```
+
+To see which version `latest` resolved to:
+
+```bash
+docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$(docker compose ps -q backend)"
 ```
 
 Open `http://<host>/` in a browser.
@@ -148,7 +156,7 @@ these files instead of editing yours:
 3. Add to `.env`:
    ```dotenv
    IMAGE_REGISTRY=<registry host you were given>/
-   DATAGUSTO_VERSION=0.1.0
+   DATAGUSTO_VERSION=latest
    ```
    and compare the rest against `.env.example`; variable names are the same
    as in the tar-archive bundle.
@@ -162,15 +170,26 @@ the same directory (Compose derives the project name from it), or set
 
 ```bash
 docker compose exec postgres pg_dump -U datagusto datagusto | gzip > backup-$(date +%F).sql.gz
-git fetch --tags && git checkout v<new>     # keeps your .env
-# .env: DATAGUSTO_VERSION=<new>
+git pull                    # compose files for the current release; keeps your .env
 scripts/ecr-login.sh datagusto
-docker compose pull
+docker compose pull         # fetches the new "latest"
 docker compose up -d        # runs database migrations, then restarts services
 ```
 
-Roll back by restoring the previous `DATAGUSTO_VERSION` and, if the
-migration changed the schema, the database dump.
+`docker compose up -d` alone does not re-pull `latest`; run `pull` first.
+
+Roll back by setting `DATAGUSTO_VERSION` to the previous version (see the
+label command in section 2 to find it), checking out that version's tag of
+this repository, and, if the migration changed the schema, restoring the
+database dump.
+
+### Pinning a version
+
+For change control, set `DATAGUSTO_VERSION=<version>` in `.env` and check
+out the matching tag of this repository (`git checkout v<version>`).
+Upgrading then means changing both to the new version before `pull`.
+A version tag is never re-pushed, so a pinned deployment always runs the
+same bits.
 
 ## Options
 
