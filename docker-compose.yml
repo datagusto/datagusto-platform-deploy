@@ -1,0 +1,161 @@
+# =============================================================================
+# DataGusto Platform - customer deployment (password login, no Keycloak)
+# =============================================================================
+# Prebuilt images only. Nothing here needs the source tree.
+#
+#   cp .env.example .env   # fill in the required values
+#   docker compose up -d
+#
+# Only the proxy publishes a port. Everything else stays on the internal
+# network. Optional overrides:
+#   -f docker-compose.yml -f docker-compose.tls.yml          serve HTTPS with your own cert
+#   -f docker-compose.yml -f docker-compose.external-db.yml  use an existing PostgreSQL
+# =============================================================================
+
+x-backend-env: &backend-env
+  POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  POSTGRES_DB: ${POSTGRES_DB:-datagusto}
+  POSTGRES_USER: ${POSTGRES_USER:-datagusto}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required (openssl rand -hex 32)}
+  JWT_REFRESH_SECRET_KEY: ${JWT_REFRESH_SECRET_KEY:?JWT_REFRESH_SECRET_KEY is required (openssl rand -hex 32)}
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+  JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS:-7}
+  ENVIRONMENT: production
+  PYTHONUNBUFFERED: "1"
+
+services:
+  proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks: [datagusto]
+
+  frontend:
+    image: ${IMAGE_REGISTRY:-}datagusto-frontend:${DATAGUSTO_VERSION:?DATAGUSTO_VERSION is required}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_DISABLE_DEVTOOLS: "true"
+    logging: *logging
+    networks: [datagusto]
+
+  backend-migrations:
+    image: ${IMAGE_REGISTRY:-}datagusto-backend:${DATAGUSTO_VERSION:?DATAGUSTO_VERSION is required}
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *backend-env
+      PYTHONPATH: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *logging
+    networks: [datagusto]
+
+  backend:
+    image: ${IMAGE_REGISTRY:-}datagusto-backend:${DATAGUSTO_VERSION:?DATAGUSTO_VERSION is required}
+    restart: unless-stopped
+    command:
+      - uvicorn
+      - app.main:app
+      - --host=0.0.0.0
+      - --port=8000
+      - --workers=${UVICORN_WORKERS:-2}
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+      - --log-level=info
+    environment:
+      <<: *backend-env
+      # Public URL of this deployment as users type it in the browser.
+      FRONTEND_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required (e.g. http://datagusto.example.local)}
+      CORS_ALLOW_ORIGINS: ${PUBLIC_BASE_URL}
+      # Password sign-up. Keep false; enable temporarily to create the first account.
+      ENABLE_REGISTRATION: ${ENABLE_REGISTRATION:-false}
+      # SSO is a separate override; this deployment runs password login only.
+      ENABLE_SSO_PREVIEW: "false"
+      # LLM provider (optional). See .env.example.
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_ENDPOINT: ${LLM_ENDPOINT:-}
+      LLM_API_VERSION: ${LLM_API_VERSION:-}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-32000}
+      LLM_PROXY_HEADER_AUTHORIZATION: ${LLM_PROXY_HEADER_AUTHORIZATION:-}
+      LLM_PROXY_HEADER_SYSTEM_CODE: ${LLM_PROXY_HEADER_SYSTEM_CODE:-}
+      LLM_VLLM_ENABLE_THINKING: ${LLM_VLLM_ENABLE_THINKING:-false}
+      LLM_VLLM_REASONING_EFFORT: ${LLM_VLLM_REASONING_EFFORT:-}
+      LLM_VLLM_STRUCTURED_OUTPUT_THINKING: ${LLM_VLLM_STRUCTURED_OUTPUT_THINKING:-false}
+      LLM_VLLM_REQUEST_TIMEOUT_SECONDS: ${LLM_VLLM_REQUEST_TIMEOUT_SECONDS:-1200}
+      LLM_OLLAMA_NUM_CTX: ${LLM_OLLAMA_NUM_CTX:-32768}
+      LLM_OLLAMA_THINKING: ${LLM_OLLAMA_THINKING:-}
+      LLM_OLLAMA_REQUEST_TIMEOUT_SECONDS: ${LLM_OLLAMA_REQUEST_TIMEOUT_SECONDS:-1200}
+      LLM_JUDGE_MODEL: ${LLM_JUDGE_MODEL:-}
+      LLM_JUDGE_MAX_TOKENS: ${LLM_JUDGE_MAX_TOKENS:-128}
+      # Notifications (optional)
+      NOTIFICATIONS_ENABLED: ${NOTIFICATIONS_ENABLED:-true}
+      SUSPECTED_VALIDATION_SWEEP_INTERVAL_SECONDS: ${SUSPECTED_VALIDATION_SWEEP_INTERVAL_SECONDS:-600}
+      # License public key override (PEM). Leave empty to use the bundled key.
+      LICENSE_PUBLIC_KEY: ${LICENSE_PUBLIC_KEY:-}
+      # Outbound proxy / private CA for optional external integrations.
+      # SSL_CERT_FILE must never be empty: an empty value leaves the Python
+      # ssl module with no trusted CAs, so it defaults to the system bundle.
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,frontend,backend}
+      SSL_CERT_FILE: ${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}
+    volumes:
+      - ./ca:/etc/datagusto/ca:ro
+    depends_on:
+      backend-migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *logging
+    networks: [datagusto]
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-datagusto}
+      POSTGRES_USER: ${POSTGRES_USER:-datagusto}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-datagusto} -d ${POSTGRES_DB:-datagusto}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+    networks: [datagusto]
+
+volumes:
+  postgres_data:
+
+networks:
+  datagusto:
+    driver: bridge

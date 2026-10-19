@@ -1,0 +1,14 @@
+# Override: use an existing PostgreSQL server instead of the bundled one.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.external-db.yml up -d
+#
+# Set POSTGRES_HOST / POSTGRES_PORT / POSTGRES_DB / POSTGRES_USER /
+# POSTGRES_PASSWORD in .env. The database must exist and the user must be
+# allowed to create tables and the pg_trgm extension.
+# Requires Docker Compose v2.24 or later (!reset).
+services:
+  postgres:
+    profiles: ["bundled-db"]
+
+  backend-migrations:
+    depends_on: !reset {}
