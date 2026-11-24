@@ -8,8 +8,8 @@ sent to you separately.
 
 By default the deployment runs the `latest` image tag, which datagusto moves
 to each stable release, and `main` of this repository always matches it.
-The tags of this repository match the image versions (`v0.1.0` ↔ image
-`0.1.0`) for deployments that pin a version.
+The tags of this repository match the image versions (`v0.1.8` ↔ image
+`0.1.8`) for deployments that pin a version.
 
 | File | Purpose |
 |---|---|
@@ -263,7 +263,7 @@ agent / SDK ──HTTP :80 /api/v1/public/…──▶ proxy ──▶ backend:8
 
 | Service | Image | Listens on | Published to host | Called by |
 |---|---|---|---|---|
-| `proxy` | `nginx:1.27-alpine` | 80 (443 with `docker-compose.tls.yml`) | `HTTP_PORT` (default 80), `HTTPS_PORT` (default 443) | browsers, agents |
+| `proxy` | `nginx:1.30.7-alpine` | 80 (443 with `docker-compose.tls.yml`) | `HTTP_PORT` (default 80), `HTTPS_PORT` (default 443) | browsers, agents |
 | `frontend` | `datagusto-frontend` | 3000 | no | proxy |
 | `backend` | `datagusto-backend` | 8000 | no | proxy, `backend-migrations` shares its image |
 | `backend-migrations` | `datagusto-backend` | - | no | runs `alembic upgrade head` once at start, then exits |
@@ -275,7 +275,7 @@ load-balancer checks). The browser and the public API use the same origin,
 so `PUBLIC_BASE_URL` is the only URL to configure; the backend derives its
 allowed CORS origin and the links in notifications from it. Requests to
 `/api/` are proxied with long timeouts (LLM-backed calls can run for
-minutes) and a 50 MB body limit for trace uploads.
+minutes) and a 50 MB body limit for trace, document and log uploads.
 
 Start order: `postgres` (healthy) → `backend-migrations` (completes) →
 `backend` (healthy) → `proxy`. `frontend` starts independently. Health
